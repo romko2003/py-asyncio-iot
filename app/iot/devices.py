@@ -3,6 +3,7 @@ from typing import Any
 
 
 class BaseDevice:
+    """Базовий пристрій IoT з асинхронними операціями."""
     name: str
 
     def __init__(self, name: str) -> None:
@@ -10,17 +11,26 @@ class BaseDevice:
         self._connected = False
 
     async def connect(self) -> None:
-        await asyncio.sleep(0.1)  # емулюємо «дорогу» операцію
+        """Емуляція дорогого підключення."""
+        await asyncio.sleep(0.1)
         self._connected = True
         print(f"[{self.name}] connected")
 
     async def disconnect(self) -> None:
+        """Емуляція відключення."""
         await asyncio.sleep(0.05)
         self._connected = False
         print(f"[{self.name}] disconnected")
 
     async def handle(self, command: str, payload: Any | None = None) -> None:
-        """Базова реалізація (override у підкласах)."""
+        """
+        Обробка команди (перевизначається у підкласах).
+        Команди погоджені з service.send_message():
+          Light:       'on', 'off'
+          Speaker:     'power_on', 'power_off', 'play', 'stop'
+          SmartToilet: 'flush', 'clean'
+          CoffeeMaker: 'brew'
+        """
         await asyncio.sleep(0.01)
         print(f"[{self.name}] command={command} payload={payload}")
 
@@ -89,3 +99,20 @@ class CoffeeMaker(BaseDevice):
             print(f"[{self.name}] coffee is ready")
         else:
             await super().handle(command, payload)
+
+
+# === Aliases to match imports used in the original skeleton/main ===
+
+class HueLightDevice(Light):
+    """Alias for backward compatibility with the task skeleton."""
+    pass
+
+
+class SmartSpeakerDevice(Speaker):
+    """Alias for backward compatibility with the task skeleton."""
+    pass
+
+
+class SmartToiletDevice(SmartToilet):
+    """Alias for backward compatibility with the task skeleton."""
+    pass
