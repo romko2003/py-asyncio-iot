@@ -1,44 +1,64 @@
+import asyncio
 import time
 
-from iot.devices import HueLightDevice, SmartSpeakerDevice, SmartToiletDevice
-from iot.message import Message, MessageType
-from iot.service import IOTService
+from app.iot.devices import Light as HueLightDevice, Speaker as SmartSpeakerDevice, SmartToilet as SmartToiletDevice
+from app.iot.service import IoTService
+from app.iot.message import Message, MessageType
+from app.iot.utils import run_parallel, run_sequence
 
 
-def main() -> None:
-    # create an IOT service
-    service = IOTService()
+async def async_main() -> None:
+    service = IoTService()
 
-    # create and register a few devices
+    # --- реєструємо девайси (паралельно) ---
+    # якщо register_device вже async і повертає id — збираємо їх через gather
     hue_light = HueLightDevice()
     speaker = SmartSpeakerDevice()
     toilet = SmartToiletDevice()
-    hue_light_id = service.register_device(hue_light)
-    speaker_id = service.register_device(speaker)
-    toilet_id = service.register_device(toilet)
 
-    # create a few programs
-    wake_up_program = [
-        Message(hue_light_id, MessageType.SWITCH_ON),
-        Message(speaker_id, MessageType.SWITCH_ON),
-        Message(speaker_id, MessageType.PLAY_SONG, "Rick Astley - Never Gonna Give You Up"),
-    ]
+    hue_light_id, speaker_id, toilet_id = await asyncio.gather(
+        service.register_device(hue_light),
+        service.register_device(speaker),
+        service.register_device(toilet),
+    )
 
-    sleep_program = [
-        Message(hue_light_id, MessageType.SWITCH_OFF),
-        Message(speaker_id, MessageType.SWITCH_OFF),
-        Message(toilet_id, MessageType.FLUSH),
-        Message(toilet_id, MessageType.CLEAN),
-    ]
+    # === WAKE-UP PROGRAM ===
+    # 1) Паралельно: вмикаємо світло і колонку
+    await run_parallel(
+        service.send_message(Message(hue_light_id, MessageType.SWITCH_ON)),
+        service.send_message(Message(speaker_id, MessageType.SWITCH_ON)),
+    )
+    # 2) Після увімкнення колонки — ПОСЛІДОВНО запускаємо музику
+    await run_sequence(
+        service.send_message(
+            Message(
+                speaker_id,
+                MessageType.PLAY_SONG,
+                "Rick Astley - Never Gonna Give You Up",
+            )
+        )
+    )
 
-    # run the programs
-    service.run_program(wake_up_program)
-    service.run_program(sleep_program)
+    # === SLEEP PROGRAM ===
+    # 3) Паралельно: гасимо світло, а для туалету робимо ПОСЛІДОВНО flush -> clean,
+    #    і (за потреби) вимикаємо колонку після зупинки/музики.
+    await run_parallel(
+        service.send_message(Message(hue_light_id, MessageType.SWITCH_OFF)),
+        run_sequence(
+            service.send_message(Message(toilet_id, MessageType.FLUSH)),
+            service.send_message(Message(toilet_id, MessageType.CLEAN)),
+        ),
+        # якщо у тебе є окремий MessageType.STOP_SONG — додай його перед SWITCH_OFF
+        service.send_message(Message(speaker_id, MessageType.SWITCH_OFF)),
+    )
+
+
+def main() -> None:
+    start = time.perf_counter()
+    asyncio.run(async_main())
+    end = time.perf_counter()
+    print("Elapsed:", end - start)
 
 
 if __name__ == "__main__":
-    start = time.perf_counter()
     main()
-    end = time.perf_counter()
-
-    print("Elapsed:", end - start)

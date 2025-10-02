@@ -1,49 +1,72 @@
-import random
-import string
-from typing import Protocol
+import asyncio
+from typing import Iterable
 
-from .message import Message, MessageType
-
-
-def generate_id(length: int = 8) -> str:
-    return "".join(random.choices(string.ascii_uppercase, k=length))
+from .utils import run_parallel, run_sequence
+from .devices import BaseDevice
 
 
-# Protocol is very similar to ABC, but uses duck typing
-# so devices should not inherit for it (if it walks like a duck, and quacks like a duck, it's a duck)
-class Device(Protocol):
-    def connect(self) -> None:
-        ...  # Ellipsis - similar to "pass", but sometimes has different meaning
-
-    def disconnect(self) -> None:
-        ...
-
-    def send_message(self, message_type: MessageType, data: str) -> None:
-        ...
-
-
-class IOTService:
+class IoTService:
     def __init__(self) -> None:
-        self.devices: dict[str, Device] = {}
+        self._devices: dict[str, BaseDevice] = {}
 
-    def register_device(self, device: Device) -> str:
-        device.connect()
-        device_id = generate_id()
-        self.devices[device_id] = device
-        return device_id
+    async def register_devices(self, devices: Iterable[BaseDevice]) -> None:
+        """Реєстрація (конект) девайсів — ПАРАЛЕЛЬНО (швидко)."""
+        for d in devices:
+            self._devices[d.name] = d
 
-    def unregister_device(self, device_id: str) -> None:
-        self.devices[device_id].disconnect()
-        del self.devices[device_id]
+        await asyncio.gather(*(d.connect() for d in devices))
+        print("[Service] all devices registered")
 
-    def get_device(self, device_id: str) -> Device:
-        return self.devices[device_id]
+    async def send_message(self, device_name: str, command: str, payload=None) -> None:
+        """Маршрутизуємо команди на потрібний девайс (async)."""
+        device = self._devices[device_name]
+        await device.handle(command, payload)
 
-    def run_program(self, program: list[Message]) -> None:
-        print("=====RUNNING PROGRAM======")
-        for msg in program:
-            self.send_msg(msg)
-        print("=====END OF PROGRAM======")
+    async def disconnect_all(self) -> None:
+        await asyncio.gather(*(d.disconnect() for d in self._devices.values()))
+        print("[Service] all devices disconnected")
 
-    def send_msg(self, msg: Message) -> None:
-        self.devices[msg.device_id].send_message(msg.msg_type, msg.data)
+    async def run(self) -> None:
+        """Тут ми конструюємо wake_up та sleep програми
+        БЕЗ окремих змінних-наборів, а через поєднання run_sequence/parallel.
+        """
+        print("[Service] === WAKE UP PROGRAM ===")
+
+        # 1) Паралельно: вмикаємо світло, вмикаємо спікер, ставимо каву
+        await run_parallel(
+            self.send_message("Light", "on"),
+            self.send_message("Speaker", "power_on"),
+            self.send_message("CoffeeMaker", "brew"),
+        )
+
+        # 2) ПОСЛІДОВНО для SmartToilet: flush -> clean
+        await run_sequence(
+            self.send_message("SmartToilet", "flush"),
+            self.send_message("SmartToilet", "clean"),
+        )
+
+        # 3) ПОСЛІДОВНО для музики: Після power_on — play
+        await run_sequence(
+            self.send_message("Speaker", "play", payload="morning_lofi.mp3"),
+        )
+
+        print("[Service] === SLEEP PROGRAM ===")
+
+        # 4) ПОСЛІДОВНІ та ПАРАЛЕЛЬНІ кроки відпочинку.
+        #    - спочатку зупиняємо музику, тільки потім вимикаємо спікер (послідовно)
+        #    - паралельно: гасимо світло
+        await run_parallel(
+            run_sequence(
+                self.send_message("Speaker", "stop"),
+                self.send_message("Speaker", "power_off"),
+            ),
+            self.send_message("Light", "off"),
+        )
+
+        # 5) Для прикладу: нічний цикл туалету (нічого критичного, просто показ)
+        await run_sequence(
+            self.send_message("SmartToilet", "flush"),
+            self.send_message("SmartToilet", "clean"),
+        )
+
+        print("[Service] === DONE ===")
